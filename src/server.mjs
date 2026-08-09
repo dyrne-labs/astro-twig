@@ -7,10 +7,19 @@
  * instead of hitting the filesystem (twig.js `importFile`).
  *
  * The integration configures this module directly rather than through
- * serialised config, because functions and filters cannot be serialised. That
- * works because the package is marked ssr-external, so the copy Astro loads as
- * the renderer and the copy the integration imports are the same instance. If
- * that ever stops holding, `assertConfigured` is what will say so.
+ * serialised config, because functions and filters cannot be serialised.
+ *
+ * That means configuration and the renderer have to meet. They cannot rely on
+ * being the same module instance: `ssr.external` holds during a build, but the
+ * dev server inlines a linked package into its own module graph, so the copy
+ * the integration imports and the copy Astro loads as the renderer are two
+ * different modules. Anything kept in module scope diverges between them —
+ * registration bookkeeping and the slot hook both did, which showed up as
+ * twig.js refusing a duplicate template id and, more quietly, as an
+ * unconfigured renderer.
+ *
+ * So the state lives on the `Twig` instance itself, which is shared because
+ * twig.js is a plain dependency both copies resolve to the same file.
  */
 
 import Twig from 'twig';
@@ -23,35 +32,50 @@ export const RENDERER_NAME = 'astro-twig';
  */
 export const TWIG_COMPONENT = Symbol.for('astro-twig:component');
 
-const registered = new Set();
-
-let diskReads = 0;
-
-let configured = false;
+const STATE = Symbol.for('astro-twig:state');
 
 /**
  * Default: a filled slot wins over a prop of the same name. Projects whose
  * templates treat an explicit prop as more specific pass their own.
  */
-let mergeSlots = (props, slots) => ({ ...props, ...slots });
+const defaultMergeSlots = (props, slots) => ({ ...props, ...slots });
 
-// Nothing is allowed to fall through to disk: twig.js's fs loader is replaced
-// by one that throws. If an include escapes the registry the build fails loudly
-// rather than silently reading a file that will not exist once deployed.
-Twig.extend((T) => {
-  T.Templates.registerLoader('fs', (location, params) => {
-    diskReads += 1;
-    const target = (params && params.path) || location;
-    throw new Error(`astro-twig: unexpected disk read for "${target}"`);
-  });
-});
+/**
+ * Shared across every copy of this module, because it hangs off Twig.
+ */
+function state() {
+  if (!Twig[STATE]) {
+    Twig[STATE] = {
+      registered: new Set(),
+      diskReads: 0,
+      configured: false,
+      mergeSlots: defaultMergeSlots,
+    };
+
+    // Nothing is allowed to fall through to disk: twig.js's fs loader is
+    // replaced by one that throws. If an include escapes the registry the build
+    // fails loudly rather than silently reading a file that will not exist once
+    // deployed. Registered once, with the state, so a second copy of this
+    // module does not stack another loader on top.
+    Twig.extend((T) => {
+      T.Templates.registerLoader('fs', (location, params) => {
+        Twig[STATE].diskReads += 1;
+        const target = (params && params.path) || location;
+        throw new Error(`astro-twig: unexpected disk read for "${target}"`);
+      });
+    });
+  }
+
+  return Twig[STATE];
+}
 
 /**
  * Applies project-specific configuration to the shared twig.js instance.
  * Called by the integration at config time, before any render.
  */
 export function configure({ functions, filters, extensions, slots } = {}) {
-  configured = true;
+  const shared = state();
+  shared.configured = true;
 
   for (const [name, fn] of Object.entries(functions || {})) {
     Twig.extendFunction(name, fn);
@@ -63,23 +87,23 @@ export function configure({ functions, filters, extensions, slots } = {}) {
     extensions(Twig);
   }
   if (slots) {
-    mergeSlots = slots;
+    shared.mergeSlots = slots;
   }
 }
 
 /**
- * True once the integration has configured this module instance. A render
- * against an unconfigured instance means the module was bundled rather than
- * externalised, and every custom function and filter is missing.
+ * True once the integration has configured the renderer.
  */
 export function isConfigured() {
-  return configured;
+  return state().configured;
 }
 
 /**
  * Compiles a template into the registry, once per id.
  */
 export function registerTemplate(id, source) {
+  const { registered } = state();
+
   if (registered.has(id)) {
     return;
   }
@@ -106,7 +130,7 @@ export function registerTemplate(id, source) {
  * zero for the lifetime of a build; the tests assert it.
  */
 export function diskReadCount() {
-  return diskReads;
+  return state().diskReads;
 }
 
 /**
@@ -114,7 +138,7 @@ export function diskReadCount() {
  * reloading.
  */
 export function evictTemplate(id) {
-  registered.delete(id);
+  state().registered.delete(id);
   Twig.extend((T) => {
     delete T.Templates.registry[id];
   });
@@ -124,9 +148,10 @@ export function evictTemplate(id) {
  * Test seam: drops all configuration and registrations.
  */
 export function reset() {
-  configured = false;
-  mergeSlots = (props, slots) => ({ ...props, ...slots });
-  for (const id of registered) {
+  const shared = state();
+  shared.configured = false;
+  shared.mergeSlots = defaultMergeSlots;
+  for (const id of [...shared.registered]) {
     evictTemplate(id);
   }
 }
@@ -169,7 +194,7 @@ export default {
     // Slots arrive as already-rendered HTML strings, which is what a Twig
     // variable holding markup is. No conversion needed.
     try {
-      return { html: render(Component.id, mergeSlots(props, asStrings(slots))) };
+      return { html: render(Component.id, state().mergeSlots(props, asStrings(slots))) };
     } catch (error) {
       // twig.js reports failures from inside its own filters, with no hint of
       // which template was rendering. Without this, a build error points at
