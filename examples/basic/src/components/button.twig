@@ -1,0 +1,16 @@
+{#
+/**
+ * Button — exercises props, a default, an include and a slot variable.
+ */
+#}
+{%- set size = size|default('regular') -%}
+<div class="ct-button ct-button--{{ theme|default('light') }} ct-button--{{ size }}">
+  {%- if url -%}
+    {% include 'link.twig' with { url: url, text: text, theme: theme } only %}
+  {%- else -%}
+    <button type="button">{{ text }}</button>
+  {%- endif -%}
+  {%- if content_bottom is not empty %}
+  <div class="ct-button__bottom">{{ content_bottom }}</div>
+  {%- endif %}
+</div>

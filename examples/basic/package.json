@@ -1,0 +1,19 @@
+{
+  "name": "astro-twig-example-basic",
+  "private": true,
+  "type": "module",
+  "description": "Runnable proof that Twig renders through Astro's renderer API",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "astro": "^7.2.0",
+    "astro-twig": "file:../.."
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.0",
+    "typescript": "^5.0.0"
+  }
+}

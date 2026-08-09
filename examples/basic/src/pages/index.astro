@@ -1,0 +1,23 @@
+---
+// Imported through the `@ct/*` path alias, which is what makes exact-name
+// type declarations possible (see src/twig.d.ts).
+import Button from '@ct/button.twig';
+---
+
+<html lang="en">
+  <head><title>astro-twig</title></head>
+  <body>
+    <h1>astro-twig</h1>
+
+    <!-- props only -->
+    <Button theme="dark" text="Plain button" />
+
+    <!-- props, and an include resolved from the registry -->
+    <Button theme="light" size="large" text="Link button" url="/somewhere" />
+
+    <!-- a named slot mapping onto a Twig variable -->
+    <Button theme="light" text="With slot">
+      <Fragment slot="content_bottom"><em>slot content</em></Fragment>
+    </Button>
+  </body>
+</html>
