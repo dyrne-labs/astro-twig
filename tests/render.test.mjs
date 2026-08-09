@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import renderer, { TWIG_COMPONENT, configure, diskReadCount, registerTemplate } from '../src/server.mjs';
+import renderer, { TWIG_COMPONENT, configure, diskReadCount, evictTemplate, registerTemplate } from '../src/server.mjs';
 
 function component(id, source) {
   const handle = { id, source };
@@ -144,6 +144,19 @@ test('macros imported from _self render', async () => {
   );
   const html = await render(withMacro);
   assert.match(html, /<ul><li>x<\/li><\/ul>/);
+});
+
+test('an evicted template recompiles from its new source', async () => {
+  // The whole of dev-server reloading rests on this. Untested, it is an
+  // assumption that a re-registered id picks up the new markup rather than
+  // serving the compiled copy already in the registry.
+  const first = component('evictable.twig', '<p>first</p>');
+  assert.equal(await render(first), '<p>first</p>');
+
+  evictTemplate('evictable.twig');
+  registerTemplate('evictable.twig', '<p>second</p>');
+
+  assert.equal(await render(component('evictable.twig', '<p>second</p>')), '<p>second</p>');
 });
 
 test('nothing reached the filesystem loader', () => {
