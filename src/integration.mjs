@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { configure } from './server.mjs';
+import { configure, evictTemplate } from './server.mjs';
 
 const RENDERER = 'astro-twig';
 
@@ -145,6 +145,32 @@ function vitePluginTwig({ idFor, roots }) {
     enforce: 'pre',
 
     buildStart: reindex,
+
+    /**
+     * Dev-server reloading.
+     *
+     * Two things have to happen that Vite cannot do on its own.
+     *
+     * The compiled template is cached in twig.js's registry under its id, and
+     * `registerTemplate` returns early for an id it already knows. Without
+     * evicting, the module re-transforms with the new source, re-registers,
+     * and the old markup renders anyway — an edit that appears to do nothing.
+     *
+     * Re-indexing covers an edit that adds a `{% include %}` of a template
+     * that was not in the graph before, and a template file that is new since
+     * the server started. The index is what turns an include target into a
+     * module to import, so a stale one drops the dependency silently.
+     *
+     * Returning nothing leaves Vite to invalidate the module and its
+     * importers as usual, which is what re-renders the pages that use it.
+     */
+    handleHotUpdate({ file }) {
+      if (!file.endsWith('.twig')) {
+        return;
+      }
+      reindex();
+      evictTemplate(idFor(file));
+    },
 
     async transform(_code, fileId) {
       if (!fileId.endsWith('.twig')) {

@@ -84,6 +84,15 @@ and `use`. A dynamically named include still renders if something else has alrea
 target, but it will not pull the target in by itself. `{% import _self %}` names no file and is
 correctly ignored.
 
+## Dev server
+
+Editing a template updates the page, and so does editing a template it includes.
+
+Two things make that work, and both are needed. The compiled template is cached in twig.js's
+registry under its id, so it is evicted on change — otherwise the module re-transforms with the new
+source, re-registers, and the old markup renders anyway. And the template index is rebuilt, so an
+edit that adds an `{% include %}` of a file that was not in the graph before still resolves.
+
 ## No hydration
 
 `client:load` and friends throw at build time. This is deliberate and it has to be explicit: Astro
