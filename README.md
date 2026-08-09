@@ -31,12 +31,36 @@ A runnable proof is in [`examples/basic`](examples/basic): `npm install && npm r
 | Option | Required | Default | |
 |---|---|---|---|
 | `components` | yes | — | Directory holding the `.twig` files. String or `URL`. |
-| `id` | no | path relative to `components` | Derives a template's registry id from its absolute path. |
+| `namespaces` | no | `{}` | Extra roots, keyed by the prefix their templates are addressed under. |
+| `id` | no | path relative to its root | Derives a template's registry id from its absolute path. |
+| `functions` | no | `{}` | Registered as Twig functions. |
+| `filters` | no | `{}` | Registered as Twig filters. |
+| `extensions` | no | — | Escape hatch, handed the `Twig` instance. |
+| `slots` | no | slots win | Decides how named slots merge with props. |
+
+```js
+twig({
+  components: new URL('./src/components', import.meta.url),
+  namespaces: { '@atoms': new URL('./src/atoms', import.meta.url) },
+  functions: { shout: (v) => String(v).toUpperCase() },
+  filters: { exclaim: (v) => `${v}!` },
+  extensions: (Twig) => Twig.extendFunction('t', translate),
+  slots: (props, slots) => ({ ...slots, ...props }),
+});
+```
 
 The id is what `{% include %}` matches on. With the default, a template at
-`components/atoms/button.twig` is included as `{% include 'atoms/button.twig' %}`. Projects with
-flat `namespace:name` ids pass their own `id` function; flat ids cost nothing to resolve because
-they are used as registry keys verbatim.
+`components/atoms/button.twig` is included as `{% include 'atoms/button.twig' %}`, and one under the
+`@atoms` namespace as `{% include '@atoms/button.twig' %}`. Projects with flat `namespace:name` ids
+pass their own `id` function; flat ids cost nothing to resolve because they are used as registry
+keys verbatim.
+
+`slots` exists because projects disagree about precedence. The default lets a filled slot override a
+prop of the same name; return `{ ...slots, ...props }` for the opposite.
+
+Functions and filters are passed as live values rather than serialised config, which means the
+package marks itself `ssr.external` so the renderer stays a single module instance. `isConfigured()`
+reports whether that held.
 
 ## How it works
 
@@ -50,8 +74,10 @@ targets are emitted as ESM imports of the included template's module. The bundle
 registration, inlines every template's source, and tree-shakes templates nothing imports. No glob
 and no manifest.
 
-That scan matches literal single-quoted targets. A dynamically named include still renders if
-something else has already registered the target, but it will not pull the target in by itself.
+That scan matches literal single-quoted targets in `include`, `extends`, `embed`, `import`, `from`
+and `use`. A dynamically named include still renders if something else has already registered the
+target, but it will not pull the target in by itself. `{% import _self %}` names no file and is
+correctly ignored.
 
 ## No hydration
 

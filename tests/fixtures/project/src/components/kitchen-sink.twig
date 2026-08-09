@@ -1,0 +1,33 @@
+{#
+/**
+ * Exercises every option at once.
+ *
+ * - a whitespace-controlled include, which the scan must still find
+ * - a namespaced include
+ * - macros imported from _self, the shape this project's menus use
+ * - a custom function, a custom filter, and one added via `extensions`
+ * - a slot variable
+ */
+#}
+{% import _self as m %}
+
+{% macro row(label, depth) %}
+  <li class="depth-{{ depth }}">{{ label }}</li>
+{% endmacro %}
+
+<section>
+  {%- include 'link.twig' with { url: '/a', text: 'included' } only -%}
+  {% include '@atoms/badge.twig' with { label: 'namespaced' } only %}
+
+  <p class="fn">{{ shout('loud') }}</p>
+  <p class="filter">{{ 'filtered'|exclaim }}</p>
+  <p class="ext">{{ viaExtension() }}</p>
+
+  <ul>
+    {{ m.row('first', 1) }}
+    {{ m.row('second', 2) }}
+  </ul>
+
+  <div class="slot">{{ content }}</div>
+  <div class="wins">{{ collision }}</div>
+</section>

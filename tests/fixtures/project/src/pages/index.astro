@@ -1,0 +1,13 @@
+---
+import KitchenSink from '../components/kitchen-sink.twig';
+---
+
+<html lang="en">
+  <head><title>fixture</title></head>
+  <body>
+    <KitchenSink collision="prop wins">
+      <Fragment slot="content">slot content</Fragment>
+      <Fragment slot="collision">slot loses</Fragment>
+    </KitchenSink>
+  </body>
+</html>

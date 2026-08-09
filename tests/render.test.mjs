@@ -73,6 +73,35 @@ test('refuses to hydrate', async () => {
   );
 });
 
+test('extends resolves from the registry', async () => {
+  registerTemplate('base.twig', '<div class="base">{% block body %}fallback{% endblock %}</div>');
+  const child = component(
+    'child.twig',
+    `{% extends 'base.twig' %}{% block body %}overridden{% endblock %}`,
+  );
+  const html = await render(child);
+  assert.match(html, /<div class="base">overridden<\/div>/);
+});
+
+test('embed resolves from the registry and fills its blocks', async () => {
+  registerTemplate('card.twig', '<div class="card">{% block body %}empty{% endblock %}</div>');
+  const embedder = component(
+    'embedder.twig',
+    `{% embed 'card.twig' %}{% block body %}filled{% endblock %}{% endembed %}`,
+  );
+  const html = await render(embedder);
+  assert.match(html, /<div class="card">filled<\/div>/);
+});
+
+test('macros imported from _self render', async () => {
+  const withMacro = component(
+    'macro.twig',
+    `{% import _self as m %}{% macro row(label) %}<li>{{ label }}</li>{% endmacro %}<ul>{{ m.row('x') }}</ul>`,
+  );
+  const html = await render(withMacro);
+  assert.match(html, /<ul><li>x<\/li><\/ul>/);
+});
+
 test('nothing reached the filesystem loader', () => {
   assert.equal(diskReadCount(), 0);
 });

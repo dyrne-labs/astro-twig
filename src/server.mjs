@@ -5,6 +5,12 @@
  * under a flat id and WITHOUT a `path`, which is what makes
  * `{% include 'ns:name' %}` resolve by exact string match against the registry
  * instead of hitting the filesystem (twig.js `importFile`).
+ *
+ * The integration configures this module directly rather than through
+ * serialised config, because functions and filters cannot be serialised. That
+ * works because the package is marked ssr-external, so the copy Astro loads as
+ * the renderer and the copy the integration imports are the same instance. If
+ * that ever stops holding, `assertConfigured` is what will say so.
  */
 
 import Twig from 'twig';
@@ -21,6 +27,14 @@ const registered = new Set();
 
 let diskReads = 0;
 
+let configured = false;
+
+/**
+ * Default: a filled slot wins over a prop of the same name. Projects whose
+ * templates treat an explicit prop as more specific pass their own.
+ */
+let mergeSlots = (props, slots) => ({ ...props, ...slots });
+
 // Nothing is allowed to fall through to disk: twig.js's fs loader is replaced
 // by one that throws. If an include escapes the registry the build fails loudly
 // rather than silently reading a file that will not exist once deployed.
@@ -31,6 +45,36 @@ Twig.extend((T) => {
     throw new Error(`astro-twig: unexpected disk read for "${target}"`);
   });
 });
+
+/**
+ * Applies project-specific configuration to the shared twig.js instance.
+ * Called by the integration at config time, before any render.
+ */
+export function configure({ functions, filters, extensions, slots } = {}) {
+  configured = true;
+
+  for (const [name, fn] of Object.entries(functions || {})) {
+    Twig.extendFunction(name, fn);
+  }
+  for (const [name, fn] of Object.entries(filters || {})) {
+    Twig.extendFilter(name, fn);
+  }
+  if (extensions) {
+    extensions(Twig);
+  }
+  if (slots) {
+    mergeSlots = slots;
+  }
+}
+
+/**
+ * True once the integration has configured this module instance. A render
+ * against an unconfigured instance means the module was bundled rather than
+ * externalised, and every custom function and filter is missing.
+ */
+export function isConfigured() {
+  return configured;
+}
 
 /**
  * Compiles a template into the registry, once per id.
@@ -70,6 +114,17 @@ export function evictTemplate(id) {
   });
 }
 
+/**
+ * Test seam: drops all configuration and registrations.
+ */
+export function reset() {
+  configured = false;
+  mergeSlots = (props, slots) => ({ ...props, ...slots });
+  for (const id of registered) {
+    evictTemplate(id);
+  }
+}
+
 function render(id, data) {
   return Twig.twig({ ref: id }).render(data);
 }
@@ -90,7 +145,7 @@ export default {
 
     // Slots arrive as already-rendered HTML strings, which is what a Twig
     // variable holding markup is. No conversion needed.
-    return { html: render(Component.id, { ...props, ...slots }) };
+    return { html: render(Component.id, mergeSlots(props, slots)) };
   },
 
   // false: <astro-slot> markers exist so a client framework can find slots

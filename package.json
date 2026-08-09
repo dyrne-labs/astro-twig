@@ -38,6 +38,9 @@
   "dependencies": {
     "twig": "^3.0.0"
   },
+  "devDependencies": {
+    "astro": "^5.0.0"
+  },
   "peerDependencies": {
     "astro": ">=5.0.0",
     "vite": ">=5.0.0"

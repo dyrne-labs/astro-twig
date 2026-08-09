@@ -15,10 +15,17 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { configure } from './server.mjs';
 
 const RENDERER = 'astro-twig';
 
-const INCLUDE_RE = /\{%-?\s*(?:include|extends|embed)\s+'([^']+)'/g;
+/**
+ * Bare specifiers, so `ssr.external` applies to them. That is what keeps the
+ * renderer a single module instance shared with this file — see server.mjs.
+ */
+const SERVER = 'astro-twig/server';
+
+const INCLUDE_RE = /\{%-?\s*(?:include|extends|embed|import|from|use)\s+'([^']+)'/g;
 
 /**
  * Vite module ids use forward slashes on every platform.
@@ -26,8 +33,6 @@ const INCLUDE_RE = /\{%-?\s*(?:include|extends|embed)\s+'([^']+)'/g;
 function toModuleId(absolutePath) {
   return absolutePath.split(path.sep).join('/');
 }
-
-const SERVER = toModuleId(fileURLToPath(new URL('./server.mjs', import.meta.url)));
 
 function toPath(value) {
   if (value instanceof URL) {
@@ -40,24 +45,56 @@ function toPath(value) {
 }
 
 /**
- * Default registry id: the template's path relative to the components
- * directory, extension included. `atoms/button.twig` includes as
- * `{% include 'atoms/button.twig' %}`.
+ * Every template target named in a source, in order. Matches literal
+ * single-quoted targets only; a dynamically named include still renders if the
+ * target is registered by something else, but cannot be discovered here.
+ */
+export function includeTargets(source) {
+  return [...source.matchAll(INCLUDE_RE)].map((match) => match[1]);
+}
+
+/**
+ * Resolves the roots a template can live under: the components directory,
+ * plus any namespaced directories. Longest path first, so a namespace nested
+ * inside the components directory wins over the components directory itself.
+ */
+function resolveRoots(componentsDir, namespaces) {
+  const roots = [{ prefix: '', dir: componentsDir }];
+
+  for (const [prefix, dir] of Object.entries(namespaces || {})) {
+    roots.push({ prefix, dir: path.resolve(toPath(dir)) });
+  }
+
+  return roots.sort((a, b) => b.dir.length - a.dir.length);
+}
+
+/**
+ * Default registry id: the template's path relative to its root, extension
+ * included, prefixed by the namespace if it has one. So `atoms/button.twig`,
+ * or `@atoms/button.twig` under a namespace.
  *
  * Projects using flat ids — a `namespace:name` shape, for instance — pass
  * their own `id` function. A flat id costs nothing to resolve, because it is
  * used as the registry key verbatim.
  */
-function makeDefaultId(componentsDir) {
-  return (file) => toModuleId(path.relative(componentsDir, file));
+function makeDefaultId(roots) {
+  return (file) => {
+    const root = roots.find((candidate) => file.startsWith(`${candidate.dir}${path.sep}`));
+    if (!root) {
+      return toModuleId(path.basename(file));
+    }
+    const relative = toModuleId(path.relative(root.dir, file));
+    return root.prefix ? `${root.prefix}/${relative}` : relative;
+  };
 }
 
 /**
- * Maps every template id in a directory tree to its absolute file path, so an
- * include target can be resolved to a module to import.
+ * Maps every template id to its absolute file path, so an include target can
+ * be resolved to a module to import.
  */
-function indexTemplates(dir, idFor) {
+function indexTemplates(roots, idFor) {
   const map = new Map();
+
   const walk = (current) => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const full = path.join(current, entry.name);
@@ -68,7 +105,13 @@ function indexTemplates(dir, idFor) {
       }
     }
   };
-  walk(dir);
+
+  for (const root of roots) {
+    if (fs.existsSync(root.dir)) {
+      walk(root.dir);
+    }
+  }
+
   return map;
 }
 
@@ -90,29 +133,35 @@ function compileTemplate(source, id, deps) {
   ].join('\n');
 }
 
-function vitePluginTwig({ idFor, componentsDir }) {
+function vitePluginTwig({ idFor, roots }) {
   let index = new Map();
+
+  const reindex = () => {
+    index = indexTemplates(roots, idFor);
+  };
 
   return {
     name: 'vite-plugin-twig',
     enforce: 'pre',
 
-    buildStart() {
-      index = indexTemplates(componentsDir, idFor);
-    },
+    buildStart: reindex,
 
     async transform(_code, fileId) {
       if (!fileId.endsWith('.twig')) {
         return null;
       }
 
+      if (index.size === 0) {
+        reindex();
+      }
+
       const source = await fsp.readFile(fileId, 'utf8');
 
       const deps = new Set();
-      for (const match of source.matchAll(INCLUDE_RE)) {
-        const target = index.get(match[1]);
-        if (target && target !== fileId) {
-          deps.add(toModuleId(target));
+      for (const target of includeTargets(source)) {
+        const file = index.get(target);
+        if (file && file !== fileId) {
+          deps.add(toModuleId(file));
         }
       }
 
@@ -124,8 +173,18 @@ function vitePluginTwig({ idFor, componentsDir }) {
 /**
  * @param {object} options
  * @param {string|URL} options.components Directory holding the `.twig` files.
+ * @param {Record<string, string|URL>} [options.namespaces] Extra roots, keyed
+ *   by the prefix their templates are addressed under.
  * @param {(file: string) => string} [options.id] Derives a registry id from an
- *   absolute template path. Defaults to the path relative to `components`.
+ *   absolute template path.
+ * @param {Record<string, Function>} [options.functions] Registered as Twig
+ *   functions.
+ * @param {Record<string, Function>} [options.filters] Registered as Twig
+ *   filters.
+ * @param {(Twig: object) => void} [options.extensions] Escape hatch, handed
+ *   the Twig instance.
+ * @param {(props: object, slots: object) => object} [options.slots] Decides
+ *   how named slots merge with props. Defaults to slots winning.
  */
 export default function twig(options = {}) {
   const componentsDir = toPath(options.components);
@@ -137,7 +196,10 @@ export default function twig(options = {}) {
     throw new Error(`astro-twig: components directory not found: ${componentsDir}`);
   }
 
-  const idFor = options.id || makeDefaultId(componentsDir);
+  const roots = resolveRoots(path.resolve(componentsDir), options.namespaces);
+  const idFor = options.id || makeDefaultId(roots);
+
+  configure(options);
 
   return {
     name: RENDERER,
@@ -152,8 +214,10 @@ export default function twig(options = {}) {
         });
         updateConfig({
           vite: {
-            plugins: [vitePluginTwig({ idFor, componentsDir })],
-            ssr: { external: ['twig'] },
+            plugins: [vitePluginTwig({ idFor, roots })],
+            // astro-twig external so the renderer stays one module instance,
+            // shared with the `configure` call above.
+            ssr: { external: ['twig', 'astro-twig'] },
           },
         });
       },
