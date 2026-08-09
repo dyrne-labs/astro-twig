@@ -92,6 +92,12 @@ export function registerTemplate(id, source) {
     allowInlineIncludes: true,
     autoescape: false,
     rethrow: true,
+    // renderToStaticMarkup has to hand back a string, and twig.js defaults to
+    // async mode, where render() can settle later. None of the templates this
+    // has been run against need it — the suite passes either way — but a
+    // template that did would produce "[object Promise]" in the output rather
+    // than an error, so the default is not worth keeping.
+    async: false,
   });
 }
 
@@ -129,6 +135,23 @@ function render(id, data) {
   return Twig.twig({ ref: id }).render(data);
 }
 
+/**
+ * Astro types slots as `Record<string, string>`, but at runtime the values are
+ * objects that stringify to their HTML. Twig cannot tell the difference until
+ * something iterates one — `{% for x in slot %}` then walks the object's own
+ * keys instead of the markup, and hands a null into whatever comes next. The
+ * failure surfaces inside a twig.js filter, nowhere near the slot.
+ *
+ * Coercing here makes the runtime match the declared type.
+ */
+function asStrings(slots) {
+  const out = {};
+  for (const [name, value] of Object.entries(slots || {})) {
+    out[name] = value === null || value === undefined ? value : String(value);
+  }
+  return out;
+}
+
 export default {
   name: RENDERER_NAME,
 
@@ -145,7 +168,15 @@ export default {
 
     // Slots arrive as already-rendered HTML strings, which is what a Twig
     // variable holding markup is. No conversion needed.
-    return { html: render(Component.id, mergeSlots(props, slots)) };
+    try {
+      return { html: render(Component.id, mergeSlots(props, asStrings(slots))) };
+    } catch (error) {
+      // twig.js reports failures from inside its own filters, with no hint of
+      // which template was rendering. Without this, a build error points at
+      // node_modules and nothing else.
+      error.message = `astro-twig: rendering "${Component.id}" failed. ${error.message}`;
+      throw error;
+    }
   },
 
   // false: <astro-slot> markers exist so a client framework can find slots

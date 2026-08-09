@@ -56,7 +56,12 @@ pass their own `id` function; flat ids cost nothing to resolve because they are 
 keys verbatim.
 
 `slots` exists because projects disagree about precedence. The default lets a filled slot override a
-prop of the same name; return `{ ...slots, ...props }` for the opposite.
+prop of the same name; return `{ ...slots, ...props }` for the opposite. It receives the full set of
+props and slots and returns the template's data, so it doubles as the place to project or convert
+values on their way in.
+
+Slot values are coerced to strings before the hook sees them. Astro types them as strings but passes
+objects that stringify, and Twig cannot tell the difference until a template iterates one.
 
 Functions and filters are passed as live values rather than serialised config, which means the
 package marks itself `ssr.external` so the renderer stays a single module instance. `isConfigured()`

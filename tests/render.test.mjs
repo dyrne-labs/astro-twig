@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import renderer, { TWIG_COMPONENT, diskReadCount, registerTemplate } from '../src/server.mjs';
+import renderer, { TWIG_COMPONENT, configure, diskReadCount, registerTemplate } from '../src/server.mjs';
 
 function component(id, source) {
   const handle = { id, source };
@@ -59,6 +59,50 @@ test('resolves an include from the registry', async () => {
 test('a slot lands in the matching template variable', async () => {
   const html = await render(BUTTON, { text: 'Go' }, { content_bottom: '<em>more</em>' });
   assert.match(html, /<i><em>more<\/em><\/i>/);
+});
+
+test('a slot that is an object, not a string, is coerced before Twig sees it', async () => {
+  // Astro types slots as Record<string, string>, but passes objects that
+  // stringify. A template that only interpolates a slot cannot tell; one that
+  // iterates it walks the object's own keys and ends up with null, which
+  // surfaces much later inside whatever filter touches it.
+  // Shaped like what Astro actually hands over: own enumerable properties,
+  // with toString on the prototype. An object literal will not do — it has no
+  // keys for a loop to walk, so it fails to reproduce the bug.
+  class SlotResult {
+    constructor(html) {
+      this.htmlParts = [html];
+      this.expressions = [];
+    }
+
+    toString() {
+      return this.htmlParts.join('');
+    }
+  }
+
+  // Assert on what Twig is handed, not on what it renders. Interpolation looks
+  // right either way, because Twig stringifies the object on output — the
+  // damage only shows when a template iterates the slot, and then it surfaces
+  // inside a twig.js filter with no mention of the template.
+  let received;
+  configure({
+    slots: (props, slots) => {
+      received = slots.items;
+      return { ...props, ...slots };
+    },
+  });
+
+  const html = await render(
+    component('coerced.twig', '<p>{{ items }}</p>'),
+    {},
+    { items: new SlotResult('rendered markup') },
+  );
+
+  configure({ slots: (props, slots) => ({ ...props, ...slots }) });
+
+  assert.equal(typeof received, 'string');
+  assert.equal(received, 'rendered markup');
+  assert.equal(html, '<p>rendered markup</p>');
 });
 
 test('an explicit prop is not escaped into entities', async () => {
