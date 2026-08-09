@@ -36,7 +36,7 @@
     "test:example": "npm --prefix examples/basic run build"
   },
   "dependencies": {
-    "twig": "^3.0.0"
+    "twig": "github:dyrne-labs/twig.js#master"
   },
   "devDependencies": {
     "astro": "^5.0.0"
