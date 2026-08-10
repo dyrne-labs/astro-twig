@@ -125,5 +125,12 @@ generate these.
 
 ## Requirements
 
-Astro >= 5 and Vite >= 5 as peers. The renderer contract this builds on is byte-identical between
-Astro 5.18 and 7.2.
+Astro >= 5 and Vite >= 5 as peers. The renderer contract this builds on is byte-identical across
+Astro 5.18, 6.4 and 7.2 — the equivalence gate renders 156 components on each and finds no
+difference, whitespace included.
+
+Astro 7 needs one thing of a renderer that 5 did not. It builds static pages in a `prerender`
+environment which inlines dependencies rather than externalising them, so the copy of twig.js
+doing the rendering is not necessarily the copy the integration configured. `server.mjs` handles
+that by keeping its state on `globalThis` and replaying the configuration onto whichever instance
+it finds; nothing is required of the host.
