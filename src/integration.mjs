@@ -25,6 +25,13 @@ const RENDERER = 'astro-twig';
  */
 const SERVER = 'astro-twig/server';
 
+/**
+ * Kept out of the SSR bundle, so the renderer and the module the integration
+ * configured are the same instance. `server.mjs` explains what diverges when
+ * they are not.
+ */
+const EXTERNAL = ['twig', 'astro-twig'];
+
 const INCLUDE_RE = /\{%-?\s*(?:include|extends|embed|import|from|use)\s+'([^']+)'/g;
 
 /**
@@ -243,7 +250,22 @@ export default function twig(options = {}) {
             plugins: [vitePluginTwig({ idFor, roots })],
             // astro-twig external so the renderer stays one module instance,
             // shared with the `configure` call above.
-            ssr: { external: ['twig', 'astro-twig'] },
+            ssr: { external: EXTERNAL },
+            // And again per environment, because `ssr.external` only reaches
+            // the environment named `ssr`. Astro 7 renders static pages in a
+            // separate `prerender` environment, which starts with an empty
+            // external list — so on a static build, the list above applies to
+            // an environment that does no rendering. twig.js is then inlined
+            // into the prerender bundle, that copy is not the one `configure()`
+            // extended, and every registered function is missing at render
+            // time: `create_attribute function does not exist`.
+            //
+            // Named rather than derived from `config.environments`: this runs
+            // before Astro has declared them, so there is nothing to iterate.
+            environments: {
+              ssr: { resolve: { external: EXTERNAL } },
+              prerender: { resolve: { external: EXTERNAL } },
+            },
           },
         });
       },

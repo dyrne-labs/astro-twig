@@ -18,8 +18,20 @@
  * twig.js refusing a duplicate template id and, more quietly, as an
  * unconfigured renderer.
  *
- * So the state lives on the `Twig` instance itself, which is shared because
- * twig.js is a plain dependency both copies resolve to the same file.
+ * The state therefore lives on `globalThis`, and what `configure()` was given is
+ * kept alongside it. Both halves are needed, because a copied module brings a
+ * copied `Twig` with it:
+ *
+ * - shared state means every copy agrees on what has been registered, what the
+ *   slot hook is, and how many disk reads happened;
+ * - the recorded configuration means a copy that was handed a *different* `Twig`
+ *   can replay the functions and filters onto it, rather than rendering against
+ *   an instance nothing ever extended.
+ *
+ * Hanging the state off `Twig`, as this did, holds only while twig.js resolves
+ * to one file. Astro 7 renders static pages in a `prerender` environment that
+ * inlines it, so the renderer got a second `Twig` with no `create_attribute` on
+ * it — a build failure naming the template rather than the cause.
  */
 
 import Twig from 'twig';
@@ -41,51 +53,98 @@ const STATE = Symbol.for('astro-twig:state');
 const defaultMergeSlots = (props, slots) => ({ ...props, ...slots });
 
 /**
- * Shared across every copy of this module, because it hangs off Twig.
+ * Shared across every copy of this module, because it hangs off globalThis.
+ *
+ * `extended` tracks which `Twig` instances have had the configuration applied.
+ * A WeakSet rather than a flag: "has this been configured" is a question about a
+ * particular instance, and with a bundler in play there can be more than one.
  */
 function state() {
-  if (!Twig[STATE]) {
-    Twig[STATE] = {
-      registered: new Set(),
+  if (!globalThis[STATE]) {
+    globalThis[STATE] = {
+      // Per `Twig` instance, because the compiled-template registry is. Shared
+      // bookkeeping would have a second copy skip the compile as already done
+      // and then fail to find the template in its own registry.
+      registrations: new WeakMap(),
       diskReads: 0,
       configured: false,
+      options: null,
+      extended: new WeakSet(),
       mergeSlots: defaultMergeSlots,
     };
-
-    // Nothing is allowed to fall through to disk: twig.js's fs loader is
-    // replaced by one that throws. If an include escapes the registry the build
-    // fails loudly rather than silently reading a file that will not exist once
-    // deployed. Registered once, with the state, so a second copy of this
-    // module does not stack another loader on top.
-    Twig.extend((T) => {
-      T.Templates.registerLoader('fs', (location, params) => {
-        Twig[STATE].diskReads += 1;
-        const target = (params && params.path) || location;
-        throw new Error(`astro-twig: unexpected disk read for "${target}"`);
-      });
-    });
   }
 
-  return Twig[STATE];
+  return globalThis[STATE];
+}
+
+/**
+ * The ids compiled into one `Twig` instance's registry.
+ */
+function registeredIn(twig) {
+  const { registrations } = state();
+  if (!registrations.has(twig)) {
+    registrations.set(twig, new Set());
+  }
+  return registrations.get(twig);
+}
+
+/**
+ * Applies the configuration to a `Twig` instance, once each.
+ *
+ * Called by `configure()` for the instance it can see, and again before a render
+ * for whichever instance is doing the rendering. Those are usually the same
+ * object and the second call does nothing; when the bundler has made a copy,
+ * this is what stops that copy rendering against an unextended Twig.
+ */
+function extend(twig) {
+  const shared = state();
+
+  if (shared.extended.has(twig)) {
+    return;
+  }
+  shared.extended.add(twig);
+
+  // Nothing is allowed to fall through to disk: twig.js's fs loader is replaced
+  // by one that throws. If an include escapes the registry the build fails
+  // loudly rather than silently reading a file that will not exist once
+  // deployed. Per instance, because a second Twig brings its own loader table.
+  twig.extend((T) => {
+    T.Templates.registerLoader('fs', (location, params) => {
+      state().diskReads += 1;
+      const target = (params && params.path) || location;
+      throw new Error(`astro-twig: unexpected disk read for "${target}"`);
+    });
+  });
+
+  const { functions, filters, extensions } = shared.options || {};
+
+  for (const [name, fn] of Object.entries(functions || {})) {
+    twig.extendFunction(name, fn);
+  }
+  for (const [name, fn] of Object.entries(filters || {})) {
+    twig.extendFilter(name, fn);
+  }
+  if (extensions) {
+    extensions(twig);
+  }
 }
 
 /**
  * Applies project-specific configuration to the shared twig.js instance.
  * Called by the integration at config time, before any render.
+ *
+ * The options are kept, not just applied: a copy of this module that never sees
+ * this call still has to be able to extend the Twig it was bundled with.
  */
 export function configure({ functions, filters, extensions, slots } = {}) {
   const shared = state();
   shared.configured = true;
+  shared.options = { functions, filters, extensions };
 
-  for (const [name, fn] of Object.entries(functions || {})) {
-    Twig.extendFunction(name, fn);
-  }
-  for (const [name, fn] of Object.entries(filters || {})) {
-    Twig.extendFilter(name, fn);
-  }
-  if (extensions) {
-    extensions(Twig);
-  }
+  // A re-configure has new functions to apply, so no instance counts as done.
+  shared.extended = new WeakSet();
+  extend(Twig);
+
   if (slots) {
     shared.mergeSlots = slots;
   }
@@ -102,7 +161,11 @@ export function isConfigured() {
  * Compiles a template into the registry, once per id.
  */
 export function registerTemplate(id, source) {
-  const { registered } = state();
+  // Before the first compile, not only before the first render: a template
+  // whose own source calls a registered function has to find it here too.
+  extend(Twig);
+
+  const registered = registeredIn(Twig);
 
   if (registered.has(id)) {
     return;
@@ -138,7 +201,7 @@ export function diskReadCount() {
  * reloading.
  */
 export function evictTemplate(id) {
-  state().registered.delete(id);
+  registeredIn(Twig).delete(id);
   Twig.extend((T) => {
     delete T.Templates.registry[id];
   });
@@ -150,8 +213,10 @@ export function evictTemplate(id) {
 export function reset() {
   const shared = state();
   shared.configured = false;
+  shared.options = null;
+  shared.extended = new WeakSet();
   shared.mergeSlots = defaultMergeSlots;
-  for (const id of [...shared.registered]) {
+  for (const id of [...registeredIn(Twig)]) {
     evictTemplate(id);
   }
 }
@@ -189,6 +254,8 @@ export default {
       );
     }
 
+    // Registers into this instance's registry, and extends this instance —
+    // which is the copy actually rendering, whatever the bundler did.
     registerTemplate(Component.id, Component.source);
 
     // Slots arrive as already-rendered HTML strings, which is what a Twig
