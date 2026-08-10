@@ -18,20 +18,20 @@
  * twig.js refusing a duplicate template id and, more quietly, as an
  * unconfigured renderer.
  *
- * The state therefore lives on `globalThis`, and what `configure()` was given is
- * kept alongside it. Both halves are needed, because a copied module brings a
- * copied `Twig` with it:
+ * The state therefore lives on `globalThis`, and what `configure()` was given
+ * is kept alongside it. Both halves are needed, because a copied module brings
+ * a copied `Twig` with it:
  *
  * - shared state means every copy agrees on what has been registered, what the
  *   slot hook is, and how many disk reads happened;
- * - the recorded configuration means a copy that was handed a *different* `Twig`
- *   can replay the functions and filters onto it, rather than rendering against
- *   an instance nothing ever extended.
+ * - the recorded configuration means a copy handed a *different* `Twig` can
+ *   replay the functions and filters onto it, rather than rendering against an
+ *   instance nothing ever extended.
  *
  * Hanging the state off `Twig`, as this did, holds only while twig.js resolves
  * to one file. Astro 7 renders static pages in a `prerender` environment that
- * inlines it, so the renderer got a second `Twig` with no `create_attribute` on
- * it — a build failure naming the template rather than the cause.
+ * inlines it, so the renderer got a second `Twig` with none of the host's
+ * functions on it — a build failure naming the template rather than the cause.
  */
 
 import Twig from 'twig';
@@ -56,8 +56,8 @@ const defaultMergeSlots = (props, slots) => ({ ...props, ...slots });
  * Shared across every copy of this module, because it hangs off globalThis.
  *
  * `extended` tracks which `Twig` instances have had the configuration applied.
- * A WeakSet rather than a flag: "has this been configured" is a question about a
- * particular instance, and with a bundler in play there can be more than one.
+ * A WeakSet rather than a flag: "has this been configured" is a question about
+ * a particular instance, and with a bundler in play there can be more than one.
  */
 function state() {
   if (!globalThis[STATE]) {
@@ -91,10 +91,10 @@ function registeredIn(twig) {
 /**
  * Applies the configuration to a `Twig` instance, once each.
  *
- * Called by `configure()` for the instance it can see, and again before a render
- * for whichever instance is doing the rendering. Those are usually the same
- * object and the second call does nothing; when the bundler has made a copy,
- * this is what stops that copy rendering against an unextended Twig.
+ * Called by `configure()` for the instance it can see, and again before a
+ * render for whichever instance is doing the rendering. Those are usually the
+ * same object and the second call does nothing; when the bundler has made a
+ * copy, this is what stops that copy rendering against an unextended Twig.
  */
 function extend(twig) {
   const shared = state();

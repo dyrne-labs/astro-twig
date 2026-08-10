@@ -8,8 +8,17 @@
  *
  * State in module scope diverges between them. That showed up as twig.js
  * refusing a duplicate template id, and — quieter, and worse — as a renderer
- * with none of the host's functions or slot handling. So the state lives on the
- * `Twig` instance, which both copies resolve to.
+ * with none of the host's functions or slot handling. So the state lives on
+ * `globalThis`, which no bundler can fork.
+ *
+ * A copied module can also bring a copied `Twig`, which is what Astro 7's
+ * `prerender` environment does. Sharing the state is not enough there — the
+ * second `Twig` has none of the host's functions on it — so `configure()`
+ * records what it was given and every copy replays it onto whatever instance
+ * it resolved. That half cannot be tested here: `server.mjs` imports `twig` by
+ * bare specifier, so every copy loaded in-process gets the same one and there
+ * is no seam to inject a second. What covers it is a host package's own gate,
+ * where a real bundler builds a real site.
  *
  * Without this test the invariant is only exercised indirectly, by a dev test
  * in another package that would fail with an error about stylesheets.
@@ -17,6 +26,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import Twig from 'twig';
 
 const MODULE = new URL('../src/server.mjs', import.meta.url).href;
 
@@ -58,6 +68,24 @@ test('configuration through one copy reaches a render through another', async ()
   assert.match(html, /prop wins/);
 });
 
+test('what configure() was given is kept, so a later copy can replay it', async () => {
+  const configuring = await loadCopy('records');
+
+  const shout = (value) => String(value).toUpperCase();
+  configuring.configure({ functions: { shout } });
+
+  // The bundled case cannot be reproduced in-process — every copy imports
+  // `twig` by bare specifier and gets the same instance — so this asserts on
+  // what makes that case survivable: the options are still there to apply to a
+  // Twig that has never seen them. Astro 7's prerender environment inlines
+  // twig.js, and without this every template calling a host-registered
+  // function fails with "<name> function does not exist".
+  const recorded = globalThis[Symbol.for('astro-twig:state')].options;
+
+  assert.equal(recorded.functions.shout, shout);
+  assert.equal(globalThis[Symbol.for('astro-twig:state')].extended.has(Twig), true);
+});
+
 test('registering the same template through both copies does not throw', async () => {
   const first = await loadCopy('register-a');
   const second = await loadCopy('register-b');
@@ -65,8 +93,10 @@ test('registering the same template through both copies does not throw', async (
   const source = '<p>once</p>';
 
   first.registerTemplate('shared-id.twig', source);
-  // twig.js refuses a duplicate id, so this only survives if the bookkeeping is
-  // shared rather than per-copy.
+  // twig.js refuses a duplicate id, and both copies resolve the same `Twig` —
+  // so the second call has to see the first's registration. The bookkeeping is
+  // keyed by instance rather than shared outright, because a copy that resolved
+  // a *different* Twig has an empty registry and must compile into it.
   second.registerTemplate('shared-id.twig', source);
 
   const handle = { id: 'shared-id.twig', source };
