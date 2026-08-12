@@ -1,0 +1,48 @@
+name: Test
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The floor the package declares, and the version .nvmrc pins for
+        # development. The renderer talks to Astro's internals, so the spread is
+        # worth the minute it costs.
+        node-version: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check coding standards
+        run: npm run lint
+
+      - name: Run tests
+        run: npm run test:ci
+
+      # The example is not a workspace — it carries its own Astro install and
+      # its lockfile is not committed — so it installs separately.
+      - name: Install the example's dependencies
+        run: npm --prefix examples/basic install
+
+      # Separate from the suite above because it is the one thing that proves
+      # the package works when installed rather than imported by path: the
+      # example depends on `file:../..` and runs a real `astro build`.
+      - name: Build the example
+        run: npm run test:example

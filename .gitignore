@@ -1,0 +1,8 @@
+.astro
+.logs
+.tmp
+node_modules
+
+# tests/hmr.test.mjs mkdtemps a dev-server root inside the package, because the
+# integration resolves templates relative to it.
+.hmr-*

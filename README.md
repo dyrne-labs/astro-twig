@@ -26,6 +26,19 @@ import Button from '../components/button.twig';
 
 A runnable proof is in [`examples/basic`](examples/basic): `npm install && npm run build`.
 
+## Install
+
+Not on a registry yet, so depend on the repository:
+
+```json
+"dependencies": {
+  "astro-twig": "github:dyrne-labs/astro-twig#main"
+}
+```
+
+A `file:` path to a checkout beside your project works too, and is the better option while the
+package and the thing consuming it are both moving.
+
 ## Options
 
 | Option | Required | Default | |

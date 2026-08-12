@@ -1,7 +1,9 @@
 /**
- * The package is developed inside a design-system monorepo but is meant to be
- * extracted and reused. Repo separation would normally enforce that; while it
- * lives here, this test does.
+ * The package was written inside a design-system monorepo and kept generic so it
+ * could be extracted. It has been, and this test is what made the extraction a
+ * move rather than an untangling — so it stays, now guarding the other
+ * direction: the package's first consumer is still that design system, and a
+ * change made while looking at that consumer is the one likely to leak.
  *
  * Anything project-specific must arrive through the integration's options, not
  * be written into the package.

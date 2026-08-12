@@ -1,0 +1,9 @@
+# The package ships src/ and types/. Everything below is either how the package
+# is developed or how it is proven, and neither belongs in a consumer's tree —
+# `examples/basic` alone carries an Astro install and a built dist/.
+.editorconfig
+.github/
+.nvmrc
+eslint.config.js
+examples/
+tests/
