@@ -1,6 +1,7 @@
 /**
- * The package was written inside a design-system monorepo and kept generic so it
- * could be extracted. It has been, and this test is what made the extraction a
+ * The package was written inside a design-system monorepo and kept generic so
+ * it could be extracted.
+ * It has been, and this test is what made the extraction a
  * move rather than an untangling — so it stays, now guarding the other
  * direction: the package's first consumer is still that design system, and a
  * change made while looking at that consumer is the one likely to leak.
